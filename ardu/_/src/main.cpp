@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-
 // namespaces
 
 namespace Log{
@@ -9,14 +8,56 @@ namespace Log{
   void logData();
 }
 
+
+namespace TaskScheduler{
+  struct Task{
+    unsigned long interval;
+    unsigned long lastRun;
+    void (*func)();
+
+    Task(){
+      interval = lastRun = 0;
+      func = nullptr;
+    }
+
+    Task(unsigned long _interval, void(*_func)()) : interval(_interval), lastRun(0), func(_func) {}
+
+    void update(unsigned long now){
+      if(func != nullptr && lastRun + interval <= now){
+        lastRun = now;
+        func();
+      }
+    }
+
+  };
+
+  constexpr int max_count = 16;
+  Task Tasks[max_count];
+  unsigned int count = 0;
+
+
+  void add_task(void (*func)(), unsigned long interval){
+    Tasks[count++] = {interval, func};
+  }
+
+  void update(){
+    unsigned long now = millis();
+    for (unsigned int i = 0; i < count; i++)
+      Tasks[i].update(now);
+  }
+
+}
+
 // namespaces for variables + variables
 
 namespace Pins{
   constexpr int BUTTON = 5;
 
-  constexpr int LED_OK = 11;
-  constexpr int LED_POOR_WATER = 10;
-  constexpr int LED_ERROR = 9;
+  constexpr int LED_OK = 10;
+  constexpr int LED_POOR_WATER = 9;
+  constexpr int LED_ERROR = 8;
+  constexpr int ULTRASONIC_ECHO = 2;
+  constexpr int ULTRASONIC_TRIG = 3;
 }
 
 constexpr const unsigned int logIntervalMs = 2000;
@@ -27,7 +68,9 @@ String serialBuffer;
 bool getButton(int);
 bool getLedState(int);
 void readSerial(void (*)(JsonDocument&));
+void serialTask();
 void processCommands(JsonDocument&);
+float getDistanceCm(int, int);
 
 // essential arduino functions
 
@@ -39,10 +82,16 @@ void setup() {
   pinMode(Pins::LED_OK, OUTPUT);
   pinMode(Pins::LED_POOR_WATER, OUTPUT);
   pinMode(Pins::LED_ERROR, OUTPUT);
+
+  pinMode(Pins::ULTRASONIC_TRIG, OUTPUT);
+  pinMode(Pins::ULTRASONIC_ECHO, INPUT);
+
+  TaskScheduler::add_task(serialTask, 1);
+  TaskScheduler::add_task(Log::logData, 500);
 }
 
 void loop() {
-  readSerial(processCommands);
+  TaskScheduler::update();
 }
 
 // get values functions
@@ -55,27 +104,45 @@ bool getLedState(int led){
   return digitalRead(led);
 }
 
+float getDistanceCm(int echoPin, int trigPin){
+  float duration, distance;
+  
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  duration = pulseIn(echoPin, HIGH);  
+  distance = (duration*.0343)/2; 
+  return distance;
+}
+
 // read and process functions
 
 void readSerial(void (*func)(JsonDocument&)){
   while(Serial.available()){
     char c = Serial.read();
-    Serial.println(c);
     if (c == '\n') {
-        JsonDocument doc;
+      JsonDocument doc;
 
-        if (deserializeJson(doc, serialBuffer) == DeserializationError::Ok) {
-            func(doc);
-        } else {
-            Log::err("Invalid JSON");
-        }
+      if (deserializeJson(doc, serialBuffer) == DeserializationError::Ok) {
+        Log::log("Received Serial.");
+        func(doc);
+      } else {
+        Log::err("Invalid JSON");
+      }
 
-        serialBuffer = "";
+      serialBuffer = "";
     }
     else {
         serialBuffer += c;
     }
   }
+}
+
+void serialTask(){
+  readSerial(processCommands);
 }
 
 void processCommands(JsonDocument &doc){
@@ -110,11 +177,11 @@ void processCommands(JsonDocument &doc){
 
         if(led == nullptr){
           Log::err("Missing led");
-        }else if(strcmp(led, "led_ok")){
+        }else if(strcmp(led, "led_ok") == 0){
           digitalWrite(Pins::LED_OK, val ? HIGH : LOW);
-        }else if(strcmp(led, "led_poor_water")){
+        }else if(strcmp(led, "led_poor_water") == 0){
           digitalWrite(Pins::LED_POOR_WATER, val ? HIGH : LOW);
-        }else if(strcmp(led, "led_err")){
+        }else if(strcmp(led, "led_err") == 0){
           digitalWrite(Pins::LED_ERROR, val ? HIGH : LOW);
         }else{
           String msg ="Unknown led:";
@@ -148,6 +215,7 @@ void Log::logData(){
   doc["okLed"] = getLedState(Pins::LED_OK);
   doc["poorWaterLed"] = getLedState(Pins::LED_POOR_WATER);
   doc["errorLed"] = getLedState(Pins::LED_ERROR);
+  doc["distance"] = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
 
   serializeJson(doc, Serial);
   Serial.println();
