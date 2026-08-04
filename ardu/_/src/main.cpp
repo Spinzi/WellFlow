@@ -52,7 +52,12 @@ namespace TaskScheduler{
 
 namespace Lcd{
   LiquidCrystal_I2C lcd(0x27, 16, 2);
+  constexpr int max_screens = 4; // < max_screen
+  unsigned int screen=0;
   void prt(const char*, const char*);
+  void loadScreen(int);//loads specific screen - cancel if its the same 
+  unsigned int getNextScreen();//returns value of next screen
+  void processNext(); //gets and loads next screen in order - looping
 }
 
 // namespaces for variables + variables
@@ -74,6 +79,8 @@ namespace Pins{
 constexpr const unsigned int logIntervalMs = 2000;
 String serialBuffer;
 
+JsonDocument data;// data updates each time we send information via serial and is a copy of variable doc
+
 // classes & structs for sensor or other things 
 
 DHT dht(DHTPIN, DHTTYPE);
@@ -81,7 +88,7 @@ DHT dht(DHTPIN, DHTTYPE);
 struct Dht_var{
   float humidity, temperature;
   Dht_var():temperature(0.0),humidity(0.0){}
-  Dht_var(int h, int t) : temperature(t), humidity(h){}
+  Dht_var(float h, float t) : temperature(t), humidity(h){}
 };
 
 // other function definitions
@@ -110,6 +117,7 @@ void setup() {
 
   TaskScheduler::add_task(serialTask, 1);
   TaskScheduler::add_task(Log::logData, 500);
+  TaskScheduler::add_task(Lcd::processNext, 3000);
 
   dht.begin();
 
@@ -262,6 +270,8 @@ void Log::logData(){
   doc["outsideTemp"] = _dht_data.temperature;
   doc["outsideHum"] = _dht_data.humidity;
 
+  data = doc;
+
   serializeJson(doc, Serial);
   Serial.println();
 }
@@ -289,4 +299,40 @@ void Lcd::prt(const char* first_row, const char* second_row){
   Lcd::lcd.print(first_row);
   Lcd::lcd.setCursor(0, 1);
   Lcd::lcd.print(second_row);
+}
+
+void Lcd::loadScreen(int screen){
+  String r1, r2;
+  switch(screen){
+    case 0:
+      Lcd::prt("SMART Kids CLUB ", "WellFlow-Ticleni");
+      break;
+    case 1:
+      Lcd::prt("Water level: --%", "                ");
+      break;
+    case 2:
+      r1 = "Temp: ";
+      r1 += data["outsideTemp"].as<float>();
+      r1 += "C               ";
+      r2 = "Umid: ";
+      r2 += data["outsideHum"].as<float>();
+      r2 += "%               ";
+      Lcd::prt(r1.c_str(), r2.c_str());
+      break;
+    default:
+      Lcd::prt("Error           ", "Unknown screen  ");
+  }
+
+  Lcd::screen = screen;
+}
+
+unsigned int Lcd::getNextScreen(){
+  if(Lcd::max_screens <= Lcd::screen + 1)
+    return 0;
+  else
+    return Lcd::screen + 1;
+}
+
+void Lcd::processNext(){
+  Lcd::loadScreen(Lcd::getNextScreen());
 }
