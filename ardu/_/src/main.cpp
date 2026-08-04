@@ -52,7 +52,7 @@ namespace TaskScheduler{
 
 namespace Lcd{
   LiquidCrystal_I2C lcd(0x27, 16, 2);
-  void prt(LiquidCrystal_I2C, const char*, const char*);
+  void prt(const char*, const char*);
 }
 
 // namespaces for variables + variables
