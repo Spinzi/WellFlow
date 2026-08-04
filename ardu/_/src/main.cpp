@@ -22,11 +22,11 @@ namespace TaskScheduler{
       func = nullptr;
     }
 
-    Task(unsigned long _interval, void(*_func)()) : interval(_interval), lastRun(0), func(_func) {}
+    Task(unsigned long _interval, void(*_func)()) : interval(_interval), lastRun(millis()), func(_func) {}
 
     void update(unsigned long now){
-      if(func != nullptr && lastRun + interval <= now){
-        lastRun = now;
+      while(func != nullptr && now - lastRun >= interval){
+        lastRun += interval;
         func();
       }
     }
@@ -60,6 +60,14 @@ namespace Lcd{
   void processNext(); //gets and loads next screen in order - looping
 }
 
+namespace WaterPump{
+  bool inUse();
+  void set(bool);
+  void clean();
+  void beginPumpProtocol();
+  void stopPumpProtocol();
+}
+
 // namespaces for variables + variables
 
 namespace Pins{
@@ -71,6 +79,8 @@ namespace Pins{
 
   constexpr int ULTRASONIC_ECHO = 2;
   constexpr int ULTRASONIC_TRIG = 3;
+
+  constexpr int WATER_PUMP = 4;
 }
 
 #define DHTTYPE DHT11
@@ -86,9 +96,11 @@ JsonDocument data;// data updates each time we send information via serial and i
 DHT dht(DHTPIN, DHTTYPE);
 
 struct Dht_var{
-  float humidity, temperature;
-  Dht_var():temperature(0.0),humidity(0.0){}
-  Dht_var(float h, float t) : temperature(t), humidity(h){}
+  float temperature, humidity;
+
+  Dht_var():temperature(0.0f),humidity(0.0f){}
+  
+  Dht_var(float t, float h) : temperature(t), humidity(h){}
 };
 
 // other function definitions
@@ -114,6 +126,8 @@ void setup() {
 
   pinMode(Pins::ULTRASONIC_TRIG, OUTPUT);
   pinMode(Pins::ULTRASONIC_ECHO, INPUT);
+
+  pinMode(Pins::WATER_PUMP, OUTPUT);
 
   TaskScheduler::add_task(serialTask, 1);
   TaskScheduler::add_task(Log::logData, 500);
@@ -315,7 +329,7 @@ void Lcd::loadScreen(int screen){
       r1 += data["outsideTemp"].as<float>();
       r1 += "C               ";
       r2 = "Umid: ";
-      r2 += data["outsideHum"].as<float>();
+      r2 += data["outsideHum"].as<float>();   //math is stoopid
       r2 += "%               ";
       Lcd::prt(r1.c_str(), r2.c_str());
       break;
@@ -335,4 +349,10 @@ unsigned int Lcd::getNextScreen(){
 
 void Lcd::processNext(){
   Lcd::loadScreen(Lcd::getNextScreen());
+}
+
+bool WaterPump::inUse(){
+  return digitalRead(Pins::WATER_PUMP);
+
+  
 }
