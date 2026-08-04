@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <DHT.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 // namespaces
 
 namespace Log{
@@ -7,7 +10,6 @@ namespace Log{
   void log(const char*);
   void logData();
 }
-
 
 namespace TaskScheduler{
   struct Task{
@@ -48,6 +50,11 @@ namespace TaskScheduler{
 
 }
 
+namespace Lcd{
+  LiquidCrystal_I2C lcd(0x27, 16, 2);
+  void prt(LiquidCrystal_I2C, const char*, const char*);
+}
+
 // namespaces for variables + variables
 
 namespace Pins{
@@ -56,12 +63,26 @@ namespace Pins{
   constexpr int LED_OK = 10;
   constexpr int LED_POOR_WATER = 9;
   constexpr int LED_ERROR = 8;
+
   constexpr int ULTRASONIC_ECHO = 2;
   constexpr int ULTRASONIC_TRIG = 3;
 }
 
+#define DHTTYPE DHT11
+#define DHTPIN A1
+
 constexpr const unsigned int logIntervalMs = 2000;
 String serialBuffer;
+
+// classes & structs for sensor or other things 
+
+DHT dht(DHTPIN, DHTTYPE);
+
+struct Dht_var{
+  float humidity, temperature;
+  Dht_var():temperature(0.0),humidity(0.0){}
+  Dht_var(int h, int t) : temperature(t), humidity(h){}
+};
 
 // other function definitions
 
@@ -71,6 +92,7 @@ void readSerial(void (*)(JsonDocument&));
 void serialTask();
 void processCommands(JsonDocument&);
 float getDistanceCm(int, int);
+Dht_var getTempAndHum();
 
 // essential arduino functions
 
@@ -88,6 +110,12 @@ void setup() {
 
   TaskScheduler::add_task(serialTask, 1);
   TaskScheduler::add_task(Log::logData, 500);
+
+  dht.begin();
+
+  Lcd::lcd.init();
+  Lcd::lcd.backlight();
+  Lcd::prt("Hello", "World");
 }
 
 void loop() {
@@ -116,6 +144,18 @@ float getDistanceCm(int echoPin, int trigPin){
   duration = pulseIn(echoPin, HIGH);  
   distance = (duration*.0343)/2; 
   return distance;
+}
+
+Dht_var getTempAndHum(DHT _dht){
+  Dht_var v;
+  v.humidity = _dht.readHumidity();
+  v.temperature = _dht.readTemperature();
+
+  if(isnan(v.temperature) || isnan(v.humidity)){
+    Log::err("Could not read temp or hum.");
+    return Dht_var(0, 0);
+  }
+  return v;
 }
 
 // read and process functions
@@ -217,6 +257,11 @@ void Log::logData(){
   doc["errorLed"] = getLedState(Pins::LED_ERROR);
   doc["distance"] = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
 
+  Dht_var _dht_data = getTempAndHum(dht);
+
+  doc["outsideTemp"] = _dht_data.temperature;
+  doc["outsideHum"] = _dht_data.humidity;
+
   serializeJson(doc, Serial);
   Serial.println();
 }
@@ -237,4 +282,11 @@ void Log::err(const char* err){
 
   serializeJson(doc, Serial);
   Serial.println();
+}
+
+void Lcd::prt(const char* first_row, const char* second_row){
+  Lcd::lcd.setCursor(0, 0);
+  Lcd::lcd.print(first_row);
+  Lcd::lcd.setCursor(0, 1);
+  Lcd::lcd.print(second_row);
 }
