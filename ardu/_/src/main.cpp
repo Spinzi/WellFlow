@@ -11,46 +11,218 @@ namespace Log{
   void logData();
 }
 
+template <typename DATA>
+class List{
+
+  struct El{
+    El* next, *prev;
+    DATA* data;
+    El():next(nullptr), prev(nullptr), data(nullptr){};
+  };
+
+  El* head, *tail;
+  int count;
+
+  El* nodeAt(int at){
+    if(at < 0 || at >= count){
+      String msg = "List::nodeAt - index out of bounds: ";
+      msg += at;
+      Log::err(msg.c_str());
+      return nullptr;
+    }
+    El* cur = head;
+    for(int i = 0; i < at; i++)
+      cur = cur->next;
+    return cur;
+  }
+
+public:
+
+  List():head(nullptr), tail(nullptr), count(0){}
+
+  List(DATA& data):head(nullptr), tail(nullptr), count(0){
+    add(data);
+  }
+
+  ~List(){
+    clear();
+  }
+
+  int len(){
+    return count;
+  }
+
+  bool isEmpty(){
+    return count == 0;
+  }
+
+  void add(DATA& data){
+    El* el = new El();
+    el->data = new DATA(data);
+
+    if(head == nullptr){
+      head = tail = el;
+    }else{
+      el->prev = tail;
+      tail->next = el;
+      tail = el;
+    }
+    count++;
+  }
+
+  void add(DATA& data, int at){
+    if(at < 0 || at > count){
+      String msg = "List::add - index out of bounds: ";
+      msg += at;
+      Log::err(msg.c_str());
+      return;
+    }
+
+    if(at == count){
+      add(data); // append, reuses tail logic above
+      return;
+    }
+
+    El* el = new El();
+    el->data = new DATA(data);
+
+    if(at == 0){
+      el->next = head;
+      head->prev = el;
+      head = el;
+    }else{
+      El* pos = nodeAt(at);
+      El* before = pos->prev;
+
+      el->next = pos;
+      el->prev = before;
+      before->next = el;
+      pos->prev = el;
+    }
+    count++;
+  }
+
+  DATA* get(int at){
+    El* el = nodeAt(at);
+    return el ? el->data : nullptr;
+  }
+
+  void remove(int at){
+    El* el = nodeAt(at);
+    if(el == nullptr) return; // nodeAt already logged the error
+
+    if(el->prev) el->prev->next = el->next;
+    else head = el->next;
+
+    if(el->next) el->next->prev = el->prev;
+    else tail = el->prev;
+
+    delete el->data;
+    delete el;
+    count--;
+  }
+
+  void clear(){
+    El* cur = head;
+    while(cur){
+      El* next = cur->next;
+      delete cur->data;
+      delete cur;
+      cur = next;
+    }
+    head = tail = nullptr;
+    count = 0;
+  }
+
+  void remove(DATA& target){
+    El* cur = head;
+
+    while(cur){
+      if(*(cur->data) == target){
+        if(cur->prev) cur->prev->next = cur->next;
+        else head = cur->next;
+
+        if(cur->next) cur->next->prev = cur->prev;
+        else tail = cur->prev;
+
+        delete cur->data;
+        delete cur;
+        count--;
+        return;
+      }
+      cur = cur->next;
+    }
+
+    Log::err("List::remove - element not found");
+  }
+};
+
 namespace TaskScheduler{
   struct Task{
     unsigned long interval;
     unsigned long lastRun;
+    
+    int run_count;
+
     void (*func)();
 
     Task(){
       interval = lastRun = 0;
       func = nullptr;
+      run_count = -1;
     }
 
-    Task(unsigned long _interval, void(*_func)()) : interval(_interval), lastRun(millis()), func(_func) {}
+    Task(unsigned long _interval, void(*_func)(), int run_count=-1) : interval(_interval), lastRun(millis()), func(_func), run_count(run_count) {}
 
-    void update(unsigned long now){
+    int update(unsigned long now){
+      int runs = 0;
       while(func != nullptr && now - lastRun >= interval){
         lastRun += interval;
         func();
+        runs++;
       }
+      return runs;
+    }
+
+    bool operator==(const Task& other) const {
+      return func == other.func &&
+            interval == other.interval &&
+            lastRun == other.lastRun &&
+            run_count == other.run_count;
     }
 
   };
 
-  constexpr int max_count = 16;
-  Task Tasks[max_count];
-  unsigned int count = 0;
+  List<Task> Tasks;
 
-
-  void add_task(void (*func)(), unsigned long interval){
-    Tasks[count++] = {interval, func};
+  void add_task(void (*func)(), unsigned long interval, int run_count=-1){
+    Task t = {interval, func, run_count};
+    Tasks.add(t);
   }
 
   void update(){
     unsigned long now = millis();
-    for (unsigned int i = 0; i < count; i++)
-      Tasks[i].update(now);
+    for (int i = 0; i < Tasks.len(); i++){
+      Task* cur = Tasks.get(i);
+      if(cur == nullptr) continue; // shouldn't happen, but nodeAt logs+bails on bad index
+
+      int runs = cur->update(now);
+
+      if(cur->run_count == -1 || runs == 0)
+        continue; // infinite task, or it didn't fire this call
+
+      cur->run_count -= runs;
+      if(cur->run_count <= 0){
+        Tasks.remove(i); // index-based, avoids the operator== ambiguity
+        i--;              // list shifted down, recheck this index next iteration
+      }
+    }
   }
 
 }
 
 namespace Lcd{
+  bool lockScreen = false;
   LiquidCrystal_I2C lcd(0x27, 16, 2);
   constexpr int max_screens = 4; // < max_screen
   unsigned int screen=0;
@@ -333,6 +505,11 @@ void Lcd::loadScreen(int screen){
       r2 += "%               ";
       Lcd::prt(r1.c_str(), r2.c_str());
       break;
+    case 3:
+      r1 = "Pumping...      ";
+      r2 = " - - - -- - - - ";
+      Lcd::prt(r1.c_str(), r2.c_str());
+      break;
     default:
       Lcd::prt("Error           ", "Unknown screen  ");
   }
@@ -348,11 +525,30 @@ unsigned int Lcd::getNextScreen(){
 }
 
 void Lcd::processNext(){
+  if(Lcd::lockScreen) return;
   Lcd::loadScreen(Lcd::getNextScreen());
 }
 
 bool WaterPump::inUse(){
-  return digitalRead(Pins::WATER_PUMP);
+  return digitalRead(Pins::WATER_PUMP); 
+}
 
-  
+void WaterPump::set(bool val){
+  digitalWrite(Pins::WATER_PUMP, val?HIGH:LOW);
+}
+
+void WaterPump::beginPumpProtocol(){
+  Lcd::loadScreen(3);
+  Lcd::lockScreen = true;
+  WaterPump::set(true);
+}
+
+void WaterPump::stopPumpProtocol(){
+  Lcd::lockScreen = false;
+  WaterPump::set(false);//lcd will process next naturally
+}
+
+void WaterPump::clean(){
+  WaterPump::beginPumpProtocol();
+  TaskScheduler::add_task(WaterPump::stopPumpProtocol, 5000, 1);
 }
