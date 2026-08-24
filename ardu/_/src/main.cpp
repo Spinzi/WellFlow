@@ -161,9 +161,7 @@ namespace TaskScheduler{
   struct Task{
     unsigned long interval;
     unsigned long lastRun;
-    
     int run_count;
-
     void (*func)();
 
     Task(){
@@ -208,11 +206,14 @@ namespace TaskScheduler{
 
       int runs = cur->update(now);
 
-      if(cur->run_count == -1 || runs == 0)
+      if(cur->run_count == -1){
+        Serial.println("Skipping task at -1");
         continue; // infinite task, or it didn't fire this call
+      }
 
       cur->run_count -= runs;
       if(cur->run_count <= 0){
+        Serial.println("Removing task");
         Tasks.remove(i); // index-based, avoids the operator== ambiguity
         i--;              // list shifted down, recheck this index next iteration
       }
@@ -224,7 +225,7 @@ namespace TaskScheduler{
 namespace Lcd{
   bool lockScreen = false;
   LiquidCrystal_I2C lcd(0x27, 16, 2);
-  constexpr int max_screens = 4; // < max_screen
+  constexpr int max_screens = 3; // < max_screen
   unsigned int screen=0;
   void prt(const char*, const char*);
   void loadScreen(int);//loads specific screen - cancel if its the same 
@@ -304,6 +305,7 @@ void setup() {
   TaskScheduler::add_task(serialTask, 1);
   TaskScheduler::add_task(Log::logData, 500);
   TaskScheduler::add_task(Lcd::processNext, 3000);
+  TaskScheduler::add_task(WaterPump::clean, 20000);
 
   dht.begin();
 
@@ -538,17 +540,21 @@ void WaterPump::set(bool val){
 }
 
 void WaterPump::beginPumpProtocol(){
+  Serial.println("starting");
   Lcd::loadScreen(3);
   Lcd::lockScreen = true;
   WaterPump::set(true);
 }
 
 void WaterPump::stopPumpProtocol(){
+  Serial.println("stopping");
   Lcd::lockScreen = false;
-  WaterPump::set(false);//lcd will process next naturally
+  WaterPump::set(false);
+  Lcd::processNext();
 }
 
 void WaterPump::clean(){
+  Serial.println("cleaning");
   WaterPump::beginPumpProtocol();
   TaskScheduler::add_task(WaterPump::stopPumpProtocol, 5000, 1);
 }
