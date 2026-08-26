@@ -262,7 +262,17 @@ namespace Pins{
 constexpr const unsigned int logIntervalMs = 2000;
 String serialBuffer;
 
-JsonDocument data;// data updates each time we send information via serial and is a copy of variable doc
+// Plain namespace cache of the latest sensor/state values (single instance,
+// so no need for a struct+object). Replaces the old global JsonDocument
+// "data" variable, which relied on a heap-allocating copy (data = doc;)
+// that could silently fail under low SRAM and leave fields as null. Plain
+// variables have a fixed size and never allocate, so this can't fail silently.
+namespace SensorData{
+  bool button=false, okLed=false, poorWaterLed=false, errorLed=false;
+  float distance=0;
+  int sram=0;
+  float outsideTemp=0, outsideHum=0;
+}
 
 // classes & structs for sensor or other things 
 
@@ -305,7 +315,7 @@ void setup() {
   pinMode(Pins::WATER_PUMP, OUTPUT);
 
   TaskScheduler::add_task(serialTask, 1);
-  TaskScheduler::add_task(Log::logData, 500);
+  TaskScheduler::add_task(Log::logData, 1000); // DHT11 needs ~1s between reads
   TaskScheduler::add_task(Lcd::processNext, 3000);
   TaskScheduler::add_task(WaterPump::clean, 20000);
   TaskScheduler::add_task(waterPumpButtonCheck, 50);
@@ -453,23 +463,40 @@ void Log::logData(){
 
   doc["type"] = "data";
 
-  doc["button"] = getButton(Pins::BUTTON);
-  doc["okLed"] = getLedState(Pins::LED_OK);
-  doc["poorWaterLed"] = getLedState(Pins::LED_POOR_WATER);
-  doc["errorLed"] = getLedState(Pins::LED_ERROR);
-  doc["distance"] = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
-  doc["SRAM"] = freeSRAM();
+  bool btn   = getButton(Pins::BUTTON);
+  bool ok    = getLedState(Pins::LED_OK);
+  bool poor  = getLedState(Pins::LED_POOR_WATER);
+  bool err   = getLedState(Pins::LED_ERROR);
+  float dist = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
+  int sram   = freeSRAM();
 
   Dht_var _dht_data = getTempAndHum(dht);
 
+  doc["button"] = btn;
+  doc["okLed"] = ok;
+  doc["poorWaterLed"] = poor;
+  doc["errorLed"] = err;
+  doc["distance"] = dist;
+  doc["SRAM"] = sram;
   doc["outsideTemp"] = _dht_data.temperature;
   doc["outsideHum"] = _dht_data.humidity;
 
-  data = doc;
+  // Cache primitives directly into the namespace - plain assignment, no
+  // dynamic allocation, so this can never silently fail like the old
+  // "data = doc;" JsonDocument copy could under low SRAM.
+  SensorData::button = btn;
+  SensorData::okLed = ok;
+  SensorData::poorWaterLed = poor;
+  SensorData::errorLed = err;
+  SensorData::distance = dist;
+  SensorData::sram = sram;
 
-  Serial.print("logData ran, outsideTemp now: ");
-  serializeJson(data["outsideTemp"], Serial);
-  Serial.println();
+  // Only overwrite the cached temp/humidity on a successful DHT read, so a
+  // failed poll doesn't wipe out the last good value.
+  if(!isnan(_dht_data.temperature) && !isnan(_dht_data.humidity)){
+    SensorData::outsideTemp = _dht_data.temperature;
+    SensorData::outsideHum = _dht_data.humidity;
+  }
 
   serializeJson(doc, Serial);
   Serial.println();
@@ -514,17 +541,18 @@ void Lcd::loadScreen(int screen){
       Lcd::prt("Water level: --%", "                ");
       break;
 
-    case 2: 
+    case 2: {
       char tmp[24];
 
-      snprintf(tmp, sizeof(tmp), "Temp: %dC", (int)data["outsideTemp"].as<float>());
+      snprintf(tmp, sizeof(tmp), "Temp: %dC", (int)SensorData::outsideTemp);
       snprintf(r1, sizeof(r1), "%-16.16s", tmp);
 
-      snprintf(tmp, sizeof(tmp), "Umid: %d%%", (int)data["outsideHum"].as<float>());
+      snprintf(tmp, sizeof(tmp), "Umid: %d%%", (int)SensorData::outsideHum);
       snprintf(r2, sizeof(r2), "%-16.16s", tmp);
 
       Lcd::prt(r1, r2);
       break;
+    }
 
     case 3:
       Lcd::prt("Pumping...      ", " - - - -- - - - ");
