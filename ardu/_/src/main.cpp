@@ -174,7 +174,7 @@ namespace TaskScheduler{
 
     int update(unsigned long now){
       int runs = 0;
-      while(func != nullptr && now - lastRun >= interval){
+      if(func != nullptr && (unsigned long)(now - lastRun) >= interval){
         lastRun += interval;
         func();
         runs++;
@@ -200,20 +200,20 @@ namespace TaskScheduler{
 
   void update(){
     unsigned long now = millis();
-    for (int i = 0; i < Tasks.len(); i++){
+    unsigned int task_len = Tasks.len();
+
+    for (unsigned int i = 0; i < task_len; i++){
       Task* cur = Tasks.get(i);
       if(cur == nullptr) continue; // shouldn't happen, but nodeAt logs+bails on bad index
 
       int runs = cur->update(now);
 
       if(cur->run_count == -1){
-        Serial.println("Skipping task at -1");
         continue; // infinite task, or it didn't fire this call
       }
 
       cur->run_count -= runs;
       if(cur->run_count <= 0){
-        Serial.println("Removing task");
         Tasks.remove(i); // index-based, avoids the operator== ambiguity
         i--;              // list shifted down, recheck this index next iteration
       }
@@ -284,7 +284,9 @@ void readSerial(void (*)(JsonDocument&));
 void serialTask();
 void processCommands(JsonDocument&);
 float getDistanceCm(int, int);
-Dht_var getTempAndHum();
+Dht_var getTempAndHum(DHT _dht);
+int freeSRAM();
+void waterPumpButtonCheck();
 
 // essential arduino functions
 
@@ -306,12 +308,13 @@ void setup() {
   TaskScheduler::add_task(Log::logData, 500);
   TaskScheduler::add_task(Lcd::processNext, 3000);
   TaskScheduler::add_task(WaterPump::clean, 20000);
+  TaskScheduler::add_task(waterPumpButtonCheck, 50);
 
   dht.begin();
 
   Lcd::lcd.init();
   Lcd::lcd.backlight();
-  Lcd::prt("Hello", "World");
+  Lcd::prt("CK Ticleni      ", "Starting...     ");
 }
 
 void loop() {
@@ -360,6 +363,7 @@ void readSerial(void (*func)(JsonDocument&)){
   while(Serial.available()){
     char c = Serial.read();
     if (c == '\n') {
+      Serial.println(freeSRAM());
       JsonDocument doc;
 
       if (deserializeJson(doc, serialBuffer) == DeserializationError::Ok) {
@@ -370,6 +374,8 @@ void readSerial(void (*func)(JsonDocument&)){
       }
 
       serialBuffer = "";
+      Serial.println(freeSRAM());
+
     }
     else {
         serialBuffer += c;
@@ -452,6 +458,7 @@ void Log::logData(){
   doc["poorWaterLed"] = getLedState(Pins::LED_POOR_WATER);
   doc["errorLed"] = getLedState(Pins::LED_ERROR);
   doc["distance"] = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
+  doc["SRAM"] = freeSRAM();
 
   Dht_var _dht_data = getTempAndHum(dht);
 
@@ -459,6 +466,10 @@ void Log::logData(){
   doc["outsideHum"] = _dht_data.humidity;
 
   data = doc;
+
+  Serial.print("logData ran, outsideTemp now: ");
+  serializeJson(data["outsideTemp"], Serial);
+  Serial.println();
 
   serializeJson(doc, Serial);
   Serial.println();
@@ -490,28 +501,35 @@ void Lcd::prt(const char* first_row, const char* second_row){
 }
 
 void Lcd::loadScreen(int screen){
-  String r1, r2;
+  if(screen == (int)Lcd::screen) return; // matches the declared "cancel if same" behavior
+
+  char r1[17], r2[17]; // 16 chars + null terminator, matches 16x2 LCD
+
   switch(screen){
     case 0:
       Lcd::prt("SMART Kids CLUB ", "WellFlow-Ticleni");
       break;
+
     case 1:
       Lcd::prt("Water level: --%", "                ");
       break;
-    case 2:
-      r1 = "Temp: ";
-      r1 += data["outsideTemp"].as<float>();
-      r1 += "C               ";
-      r2 = "Umid: ";
-      r2 += data["outsideHum"].as<float>();   //math is stoopid
-      r2 += "%               ";
-      Lcd::prt(r1.c_str(), r2.c_str());
+
+    case 2: 
+      char tmp[24];
+
+      snprintf(tmp, sizeof(tmp), "Temp: %dC", (int)data["outsideTemp"].as<float>());
+      snprintf(r1, sizeof(r1), "%-16.16s", tmp);
+
+      snprintf(tmp, sizeof(tmp), "Umid: %d%%", (int)data["outsideHum"].as<float>());
+      snprintf(r2, sizeof(r2), "%-16.16s", tmp);
+
+      Lcd::prt(r1, r2);
       break;
+
     case 3:
-      r1 = "Pumping...      ";
-      r2 = " - - - -- - - - ";
-      Lcd::prt(r1.c_str(), r2.c_str());
+      Lcd::prt("Pumping...      ", " - - - -- - - - ");
       break;
+
     default:
       Lcd::prt("Error           ", "Unknown screen  ");
   }
@@ -540,21 +558,33 @@ void WaterPump::set(bool val){
 }
 
 void WaterPump::beginPumpProtocol(){
-  Serial.println("starting");
+  if(Lcd::lockScreen) return;
   Lcd::loadScreen(3);
   Lcd::lockScreen = true;
   WaterPump::set(true);
 }
 
 void WaterPump::stopPumpProtocol(){
-  Serial.println("stopping");
+  if(!Lcd::lockScreen) return;
   Lcd::lockScreen = false;
   WaterPump::set(false);
   Lcd::processNext();
 }
 
 void WaterPump::clean(){
-  Serial.println("cleaning");
   WaterPump::beginPumpProtocol();
   TaskScheduler::add_task(WaterPump::stopPumpProtocol, 5000, 1);
+}
+
+int freeSRAM() {
+    extern int __heap_start, *__brkval;
+    int v;
+    return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
+}
+
+void waterPumpButtonCheck(){
+  if(getButton(Pins::BUTTON))
+    WaterPump::beginPumpProtocol();
+  else
+    WaterPump::stopPumpProtocol();
 }
