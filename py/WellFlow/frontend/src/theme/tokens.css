@@ -1,0 +1,66 @@
+/*
+  WellFlow design tokens.
+
+  Palette: warm cream base with a soft, slightly muted pastel-yellow
+  accent — a physical instrument panel, not a SaaS dashboard. Two
+  typefaces carry the personality: Fraunces (a warm, slightly humanist
+  serif) for headings and big numeric readouts, Inter for everything
+  else that needs to stay quiet and legible. A monospace face is used
+  specifically for live sensor numbers, so a glance can tell "this is a
+  measured value" apart from a label.
+*/
+
+:root {
+  /* --- Color: surfaces --- */
+  --color-bg: #fbf6ea;
+  --color-bg-gradient: radial-gradient(1200px 600px at 10% -10%, #fdf1cf55, transparent),
+    radial-gradient(1000px 500px at 100% 0%, #fff8e655, transparent);
+  --color-surface: #fffdf7;
+  --color-surface-alt: #f4ecd8;
+  --color-surface-sunken: #f0e8d4;
+  --color-border: #e7dcc0;
+  --color-border-soft: #efe6d1;
+
+  /* --- Color: text --- */
+  --color-text: #3c362b;
+  --color-text-muted: #857a64;
+  --color-text-faint: #a89b81;
+  --color-on-accent: #3c2f0c;
+
+  /* --- Color: accent (soft pastel yellow) --- */
+  --color-accent: #f0c85a;
+  --color-accent-soft: #f8e3a1;
+  --color-accent-strong: #d9a628;
+  --color-accent-wash: #fbf0d2;
+
+  /* --- Color: status --- */
+  --color-success: #6f9a5c;
+  --color-success-wash: #e7f0df;
+  --color-warning: #cf8a3b;
+  --color-warning-wash: #f7ead3;
+  --color-error: #bf5b4d;
+  --color-error-wash: #f5e0db;
+  --color-neutral: #8b8171;
+  --color-neutral-wash: #ece4d1;
+
+  /* --- Typography --- */
+  --font-display: "Fraunces", "Iowan Old Style", "Georgia", serif;
+  --font-body: "Inter", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+
+  /* --- Shape --- */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+
+  /* --- Elevation (soft, warm-tinted shadows, not neutral gray) --- */
+  --shadow-1: 0 1px 2px rgba(90, 72, 24, 0.06), 0 1px 1px rgba(90, 72, 24, 0.04);
+  --shadow-2: 0 4px 14px rgba(90, 72, 24, 0.10), 0 1px 3px rgba(90, 72, 24, 0.06);
+  --shadow-3: 0 10px 30px rgba(90, 72, 24, 0.14), 0 2px 6px rgba(90, 72, 24, 0.08);
+
+  /* --- Motion --- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 140ms;
+  --duration-medium: 260ms;
+}

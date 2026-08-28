@@ -256,6 +256,13 @@ namespace Pins{
   constexpr int WATER_PUMP = 4;
 }
 
+namespace Dist{
+  float distToBottom = 150.0, distToTop = 0.0;
+  float getDistanceCm(int, int);
+  float getLevel();
+  float getLevel(float);
+}
+
 #define DHTTYPE DHT11
 #define DHTPIN A1
 
@@ -293,7 +300,7 @@ bool getLedState(int);
 void readSerial(void (*)(JsonDocument&));
 void serialTask();
 void processCommands(JsonDocument&);
-float getDistanceCm(int, int);
+
 Dht_var getTempAndHum(DHT _dht);
 int freeSRAM();
 void waterPumpButtonCheck();
@@ -341,7 +348,7 @@ bool getLedState(int led){
   return digitalRead(led);
 }
 
-float getDistanceCm(int echoPin, int trigPin){
+float Dist::getDistanceCm(int echoPin, int trigPin){
   float duration, distance;
   
   digitalWrite(trigPin, LOW);
@@ -373,7 +380,6 @@ void readSerial(void (*func)(JsonDocument&)){
   while(Serial.available()){
     char c = Serial.read();
     if (c == '\n') {
-      Serial.println(freeSRAM());
       JsonDocument doc;
 
       if (deserializeJson(doc, serialBuffer) == DeserializationError::Ok) {
@@ -384,7 +390,6 @@ void readSerial(void (*func)(JsonDocument&)){
       }
 
       serialBuffer = "";
-      Serial.println(freeSRAM());
 
     }
     else {
@@ -467,16 +472,18 @@ void Log::logData(){
   bool ok    = getLedState(Pins::LED_OK);
   bool poor  = getLedState(Pins::LED_POOR_WATER);
   bool err   = getLedState(Pins::LED_ERROR);
-  float dist = getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
+  float dist = Dist::getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
+  float level_perc = Dist::getLevel(dist);
   int sram   = freeSRAM();
 
   Dht_var _dht_data = getTempAndHum(dht);
 
-  doc["button"] = btn;
+  doc["buttonPumping"] = btn;
   doc["okLed"] = ok;
   doc["poorWaterLed"] = poor;
   doc["errorLed"] = err;
   doc["distance"] = dist;
+  doc["waterLevel"] = level_perc;
   doc["SRAM"] = sram;
   doc["outsideTemp"] = _dht_data.temperature;
   doc["outsideHum"] = _dht_data.humidity;
@@ -615,4 +622,14 @@ void waterPumpButtonCheck(){
     WaterPump::beginPumpProtocol();
   else
     WaterPump::stopPumpProtocol();
+}
+
+float Dist::getLevel() {
+  return ((distToBottom - getDistanceCm(0, 0)) /
+    (distToBottom - distToTop)) * 100.0;
+}
+
+float Dist::getLevel(float distance) {
+  return ((distToBottom - distance) /
+    (distToBottom - distToTop)) * 100.0;
 }
