@@ -220,6 +220,29 @@ namespace TaskScheduler{
     }
   }
 
+  long get_time_left(void (*target_func)()){
+    unsigned long now = millis();
+    for (unsigned int i = 0; i < Tasks.len(); i++){
+      Task* cur = Tasks.get(i);
+      if(cur && cur->func == target_func){
+        unsigned long elapsed = now - cur->lastRun;
+        if (elapsed >= cur->interval) return 0;
+        return (cur->interval - elapsed);
+      }
+    }
+    return -1; // task-ul nu a fost găsit
+  }
+
+  void reset_task(void (*target_func)()){
+    for (unsigned int i = 0; i < Tasks.len(); i++){
+      Task* cur = Tasks.get(i);
+      if(cur && cur->func == target_func){
+        cur->lastRun = millis();
+        return;
+      }
+    }
+  }
+
 }
 
 namespace Lcd{
@@ -233,6 +256,12 @@ namespace Lcd{
   void processNext(); //gets and loads next screen in order - looping
 }
 
+namespace WaterQuality {
+  int readRaw();
+  void updateLEDs();
+}
+
+
 namespace WaterPump{
   bool inUse();
   void set(bool);
@@ -245,10 +274,11 @@ namespace WaterPump{
 
 namespace Pins{
   constexpr int BUTTON = 5;
+  constexpr int WATER_QUAL_SENS = A2;
 
   constexpr int LED_OK = 10;
-  constexpr int LED_POOR_WATER = 9;
-  constexpr int LED_ERROR = 8;
+  constexpr int LED_POOR_WATER = 8;
+  constexpr int LED_ERROR = 9;
 
   constexpr int ULTRASONIC_ECHO = 2;
   constexpr int ULTRASONIC_TRIG = 3;
@@ -279,6 +309,7 @@ namespace SensorData{
   float distance=0;
   int sram=0;
   float outsideTemp=0, outsideHum=0;
+  int waterQuality=0;
 }
 
 // classes & structs for sensor or other things 
@@ -320,12 +351,14 @@ void setup() {
   pinMode(Pins::ULTRASONIC_ECHO, INPUT);
 
   pinMode(Pins::WATER_PUMP, OUTPUT);
+  pinMode(Pins::WATER_QUAL_SENS, INPUT);
 
   TaskScheduler::add_task(serialTask, 1);
   TaskScheduler::add_task(Log::logData, 1000); // DHT11 needs ~1s between reads
   TaskScheduler::add_task(Lcd::processNext, 3000);
-  TaskScheduler::add_task(WaterPump::clean, 20000);
+  TaskScheduler::add_task(WaterPump::clean, 60000);
   TaskScheduler::add_task(waterPumpButtonCheck, 50);
+  TaskScheduler::add_task(WaterQuality::updateLEDs, 3000);
 
   dht.begin();
 
@@ -475,6 +508,7 @@ void Log::logData(){
   float dist = Dist::getDistanceCm(Pins::ULTRASONIC_ECHO, Pins::ULTRASONIC_TRIG);
   float level_perc = Dist::getLevel(dist);
   int sram   = freeSRAM();
+  int wq = WaterQuality::readRaw();
 
   Dht_var _dht_data = getTempAndHum(dht);
 
@@ -484,9 +518,12 @@ void Log::logData(){
   doc["errorLed"] = err;
   doc["distance"] = dist;
   doc["waterLevel"] = level_perc;
+  doc["waterQuality"] = wq;
   doc["SRAM"] = sram;
   doc["outsideTemp"] = _dht_data.temperature;
   doc["outsideHum"] = _dht_data.humidity;
+  long cleanTime = TaskScheduler::get_time_left(WaterPump::clean);
+  doc["nextCleanSec"] = (cleanTime > 0) ? (cleanTime / 1000) : 0;
 
   // Cache primitives directly into the namespace - plain assignment, no
   // dynamic allocation, so this can never silently fail like the old
@@ -497,6 +534,7 @@ void Log::logData(){
   SensorData::errorLed = err;
   SensorData::distance = dist;
   SensorData::sram = sram;
+  SensorData::waterQuality = wq;
 
   // Only overwrite the cached temp/humidity on a successful DHT read, so a
   // failed poll doesn't wipe out the last good value.
@@ -539,16 +577,40 @@ void Lcd::loadScreen(int screen){
 
   char r1[17], r2[17]; // 16 chars + null terminator, matches 16x2 LCD
 
+  
+
   switch(screen){
-    case 0:
+    case 0:{
       Lcd::prt("SMART Kids CLUB ", "WellFlow-Ticleni");
       break;
+    }
+    case 1:{
+      char tmp[24];
+      
+      int level = (int)Dist::getLevel(SensorData::distance);
+      if (level < 0) level = 0;
+      if (level > 100) level = 100;
 
-    case 1:
-      Lcd::prt("Water level: --%", "                ");
+      const char* status = "Necunoscuta";
+      if (SensorData::waterQuality <= 150) {
+        status = "Potabila";
+      } else if (SensorData::waterQuality < 400) {
+        status = "Nepotabila";
+      } else {
+        status = "Toxica!";
+      }
+
+      // Formatăm și umplem cu spații până la 16 caractere
+      snprintf(tmp, sizeof(tmp), "Nivel: %d%%", level);
+      snprintf(r1, sizeof(r1), "%-16.16s", tmp);
+
+      snprintf(tmp, sizeof(tmp), "Cal:%s", status);
+      snprintf(r2, sizeof(r2), "%-16.16s", tmp);
+
+      Lcd::prt(r1, r2);
       break;
-
-    case 2: {
+    }
+    case 2:{
       char tmp[24];
 
       snprintf(tmp, sizeof(tmp), "Temp: %dC", (int)SensorData::outsideTemp);
@@ -560,13 +622,13 @@ void Lcd::loadScreen(int screen){
       Lcd::prt(r1, r2);
       break;
     }
-
-    case 3:
+    case 3:{
       Lcd::prt("Pumping...      ", " - - - -- - - - ");
       break;
-
-    default:
+    }
+    default:{
       Lcd::prt("Error           ", "Unknown screen  ");
+    }
   }
 
   Lcd::screen = screen;
@@ -603,6 +665,7 @@ void WaterPump::stopPumpProtocol(){
   if(!Lcd::lockScreen) return;
   Lcd::lockScreen = false;
   WaterPump::set(false);
+  TaskScheduler::reset_task(WaterPump::clean);
   Lcd::processNext();
 }
 
@@ -617,11 +680,19 @@ int freeSRAM() {
     return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
 }
 
+bool lastButtonState = false;
 void waterPumpButtonCheck(){
-  if(getButton(Pins::BUTTON))
-    WaterPump::beginPumpProtocol();
-  else
-    WaterPump::stopPumpProtocol();
+  bool currentButtonState = getButton(Pins::BUTTON);
+
+  // Dacă starea butonului s-a schimbat față de ultima verificare
+  if(currentButtonState != lastButtonState){
+    if(currentButtonState){
+      WaterPump::beginPumpProtocol(); // Ai apăsat butonul
+    } else {
+      WaterPump::stopPumpProtocol();  // Ai eliberat butonul
+    }
+    lastButtonState = currentButtonState; // Salvăm noua stare
+  }
 }
 
 float Dist::getLevel() {
@@ -632,4 +703,26 @@ float Dist::getLevel() {
 float Dist::getLevel(float distance) {
   return ((distToBottom - distance) /
     (distToBottom - distToTop)) * 100.0;
+}
+
+int WaterQuality::readRaw() {
+  return analogRead(Pins::WATER_QUAL_SENS);
+}
+
+void WaterQuality::updateLEDs() {
+  int val = readRaw();
+
+  // Resetăm toate LED-urile la fiecare citire
+  digitalWrite(Pins::LED_OK, LOW);
+  digitalWrite(Pins::LED_POOR_WATER, LOW);
+  digitalWrite(Pins::LED_ERROR, LOW);
+
+  // Aplicăm valorile tale de calibrare
+  if (val <= 150) {
+    digitalWrite(Pins::LED_OK, HIGH);        // Apă curată
+  } else if (val < 400) {
+    digitalWrite(Pins::LED_POOR_WATER, HIGH); // Apă puțin murdară (200+)
+  } else {
+    digitalWrite(Pins::LED_ERROR, HIGH);      // Apă foarte sărată / contaminată (~500)
+  }
 }
